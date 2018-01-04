@@ -14,8 +14,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package net.opacapp.multilinecollapsingtoolbar;
+package com.dpdlad.multilinecollapsingtoolbar;
 
+import android.content.Context;
 import android.content.res.ColorStateList;
 import android.content.res.TypedArray;
 import android.graphics.Bitmap;
@@ -32,16 +33,26 @@ import android.support.v4.text.TextDirectionHeuristicsCompat;
 import android.support.v4.view.GravityCompat;
 import android.support.v4.view.ViewCompat;
 import android.text.Layout;
+import android.text.SpannableStringBuilder;
 import android.text.StaticLayout;
 import android.text.TextPaint;
 import android.text.TextUtils;
+import android.text.style.RelativeSizeSpan;
+import android.text.style.StyleSpan;
+import android.util.Log;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.animation.Interpolator;
 
-// BEGIN MODIFICATION: Added imports
-// END MODIFICATION
-
+/**
+ * @author Praveen Kumar
+ *         <p>
+ *         This class used to direct @{@link CollapsingToolbarLayout} and
+ *         It has own canvas, which would used to render the text with multi line and sub title support.
+ *         It set title by {@link #setSubTitleText(CharSequence)}
+ *         It set mutiline by {@link #setMaxLines(int)}
+ */
 final class CollapsingTextHelper {
 
     // Pre-JB-MR2 doesn't support HW accelerated canvas scaled text so we will workaround it
@@ -60,20 +71,18 @@ final class CollapsingTextHelper {
     }
 
     private final View mView;
-
-    private boolean mDrawTitle;
-    private float mExpandedFraction;
-
     private final Rect mExpandedBounds;
     private final Rect mCollapsedBounds;
     private final RectF mCurrentBounds;
+    private final TextPaint mTextPaint, mToolbarTextPaint;
+    private boolean mDrawTitle;
+    private float mExpandedFraction;
     private int mExpandedTextGravity = Gravity.CENTER_VERTICAL;
     private int mCollapsedTextGravity = Gravity.CENTER_VERTICAL;
-    private float mExpandedTextSize = 15;
-    private float mCollapsedTextSize = 15;
+    private float mExpandedTextSize = 15f;
+    private float mCollapsedTextSize = 15f;
     private ColorStateList mExpandedTextColor;
     private ColorStateList mCollapsedTextColor;
-
     private float mExpandedDrawY;
     private float mCollapsedDrawY;
     private float mExpandedDrawX;
@@ -83,25 +92,16 @@ final class CollapsingTextHelper {
     private Typeface mCollapsedTypeface;
     private Typeface mExpandedTypeface;
     private Typeface mCurrentTypeface;
-
-    private CharSequence mText;
+    private CharSequence rawTitleText, mTitleText, mSubTitleText;
     private CharSequence mTextToDraw;
     private boolean mIsRtl;
-
     private boolean mUseTexture;
     private Bitmap mExpandedTitleTexture;
     private Paint mTexturePaint;
-    // MODIFICATION: Removed now unused fields mTextureAscent and mTextureDescent
-
     private float mScale;
     private float mCurrentTextSize;
-
     private int[] mState;
-
     private boolean mBoundsChanged;
-
-    private final TextPaint mTextPaint;
-
     private Interpolator mPositionInterpolator;
     private Interpolator mTextSizeInterpolator;
 
@@ -115,7 +115,7 @@ final class CollapsingTextHelper {
     private CharSequence mTextToDrawCollapsed;
     private Bitmap mCollapsedTitleTexture;
     private Bitmap mCrossSectionTitleTexture;
-    private StaticLayout mTextLayout;
+    private StaticLayout mTextLayout, mSubTitleTextLayout;
     private float mCollapsedTextBlend;
     private float mExpandedTextBlend;
     private float mExpandedFirstLineDrawX;
@@ -128,10 +128,47 @@ final class CollapsingTextHelper {
         mView = view;
 
         mTextPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        mToolbarTextPaint = new TextPaint(Paint.ANTI_ALIAS_FLAG | Paint.SUBPIXEL_TEXT_FLAG);
+        mToolbarTextPaint.setColor(Color.WHITE);
 
         mCollapsedBounds = new Rect();
         mExpandedBounds = new Rect();
         mCurrentBounds = new RectF();
+    }
+
+    /**
+     * Returns true if {@code value} is 'close' to it's closest decimal value. Close is currently
+     * defined as it's difference being < 0.001.
+     */
+    private static boolean isClose(float value, float targetValue) {
+        return Math.abs(value - targetValue) < 0.001f;
+    }
+
+    /**
+     * Blend {@code color1} and {@code color2} using the given ratio.
+     *
+     * @param ratio of which to blend. 0.0 will return {@code color1}, 0.5 will give an even blend,
+     *              1.0 will return {@code color2}.
+     */
+    private static int blendColors(int color1, int color2, float ratio) {
+        final float inverseRatio = 1f - ratio;
+        float a = (Color.alpha(color1) * inverseRatio) + (Color.alpha(color2) * ratio);
+        float r = (Color.red(color1) * inverseRatio) + (Color.red(color2) * ratio);
+        float g = (Color.green(color1) * inverseRatio) + (Color.green(color2) * ratio);
+        float b = (Color.blue(color1) * inverseRatio) + (Color.blue(color2) * ratio);
+        return Color.argb((int) a, (int) r, (int) g, (int) b);
+    }
+
+    private static float lerp(float startValue, float endValue, float fraction,
+                              Interpolator interpolator) {
+        if (interpolator != null) {
+            fraction = interpolator.getInterpolation(fraction);
+        }
+        return AnimationUtils.lerp(startValue, endValue, fraction);
+    }
+
+    private static boolean rectEquals(Rect r, int left, int top, int right, int bottom) {
+        return !(r.left != left || r.top != top || r.right != right || r.bottom != bottom);
     }
 
     void setTextSizeInterpolator(Interpolator interpolator) {
@@ -142,34 +179,6 @@ final class CollapsingTextHelper {
     void setPositionInterpolator(Interpolator interpolator) {
         mPositionInterpolator = interpolator;
         recalculate();
-    }
-
-    void setExpandedTextSize(float textSize) {
-        if (mExpandedTextSize != textSize) {
-            mExpandedTextSize = textSize;
-            recalculate();
-        }
-    }
-
-    void setCollapsedTextSize(float textSize) {
-        if (mCollapsedTextSize != textSize) {
-            mCollapsedTextSize = textSize;
-            recalculate();
-        }
-    }
-
-    void setCollapsedTextColor(ColorStateList textColor) {
-        if (mCollapsedTextColor != textColor) {
-            mCollapsedTextColor = textColor;
-            recalculate();
-        }
-    }
-
-    void setExpandedTextColor(ColorStateList textColor) {
-        if (mExpandedTextColor != textColor) {
-            mExpandedTextColor = textColor;
-            recalculate();
-        }
     }
 
     void setExpandedBounds(int left, int top, int right, int bottom) {
@@ -193,6 +202,10 @@ final class CollapsingTextHelper {
                 && mExpandedBounds.width() > 0 && mExpandedBounds.height() > 0;
     }
 
+    int getExpandedTextGravity() {
+        return mExpandedTextGravity;
+    }
+
     void setExpandedTextGravity(int gravity) {
         if (mExpandedTextGravity != gravity) {
             mExpandedTextGravity = gravity;
@@ -200,8 +213,8 @@ final class CollapsingTextHelper {
         }
     }
 
-    int getExpandedTextGravity() {
-        return mExpandedTextGravity;
+    int getCollapsedTextGravity() {
+        return mCollapsedTextGravity;
     }
 
     void setCollapsedTextGravity(int gravity) {
@@ -209,10 +222,6 @@ final class CollapsingTextHelper {
             mCollapsedTextGravity = gravity;
             recalculate();
         }
-    }
-
-    int getCollapsedTextGravity() {
-        return mCollapsedTextGravity;
     }
 
     void setCollapsedTextAppearance(int resId) {
@@ -273,6 +282,10 @@ final class CollapsingTextHelper {
         recalculate();
     }
 
+    int getMaxLines() {
+        return maxLines;
+    }
+
     // BEGIN MODIFICATION: getter and setter method for number of max lines
     void setMaxLines(int maxLines) {
         if (maxLines != this.maxLines) {
@@ -281,11 +294,11 @@ final class CollapsingTextHelper {
             recalculate();
         }
     }
-
-    int getMaxLines() {
-        return maxLines;
-    }
     // END MODIFICATION
+
+    float getLineSpacingExtra() {
+        return lineSpacingExtra;
+    }
 
     // BEGIN MODIFICATION: getter and setter methods for line spacing
     void setLineSpacingExtra(float lineSpacingExtra) {
@@ -296,8 +309,8 @@ final class CollapsingTextHelper {
         }
     }
 
-    float getLineSpacingExtra() {
-        return lineSpacingExtra;
+    float getLineSpacingMultiplier() {
+        return lineSpacingMultiplier;
     }
 
     void setLineSpacingMultiplier(float lineSpacingMultiplier) {
@@ -306,10 +319,6 @@ final class CollapsingTextHelper {
             clearTexture();
             recalculate();
         }
-    }
-
-    float getLineSpacingMultiplier() {
-        return lineSpacingMultiplier;
     }
     // END MODIFICATION
 
@@ -327,20 +336,6 @@ final class CollapsingTextHelper {
         return null;
     }
 
-    void setCollapsedTypeface(Typeface typeface) {
-        if (areTypefacesDifferent(mCollapsedTypeface, typeface)) {
-            mCollapsedTypeface = typeface;
-            recalculate();
-        }
-    }
-
-    void setExpandedTypeface(Typeface typeface) {
-        if (areTypefacesDifferent(mExpandedTypeface, typeface)) {
-            mExpandedTypeface = typeface;
-            recalculate();
-        }
-    }
-
     void setTypefaces(Typeface typeface) {
         mCollapsedTypeface = mExpandedTypeface = typeface;
         recalculate();
@@ -350,23 +345,21 @@ final class CollapsingTextHelper {
         return mCollapsedTypeface != null ? mCollapsedTypeface : Typeface.DEFAULT;
     }
 
+    void setCollapsedTypeface(Typeface typeface) {
+        if (areTypefacesDifferent(mCollapsedTypeface, typeface)) {
+            mCollapsedTypeface = typeface;
+            recalculate();
+        }
+    }
+
     Typeface getExpandedTypeface() {
         return mExpandedTypeface != null ? mExpandedTypeface : Typeface.DEFAULT;
     }
 
-    /**
-     * Set the value indicating the current scroll value. This decides how much of the
-     * background will be displayed, as well as the title metrics/positioning.
-     *
-     * A value of {@code 0.0} indicates that the layout is fully expanded.
-     * A value of {@code 1.0} indicates that the layout is fully collapsed.
-     */
-    void setExpansionFraction(float fraction) {
-        fraction = MathUtils.clamp(fraction, 0f, 1f);
-
-        if (fraction != mExpandedFraction) {
-            mExpandedFraction = fraction;
-            calculateCurrentOffsets();
+    void setExpandedTypeface(Typeface typeface) {
+        if (areTypefacesDifferent(mExpandedTypeface, typeface)) {
+            mExpandedTypeface = typeface;
+            recalculate();
         }
     }
 
@@ -386,17 +379,46 @@ final class CollapsingTextHelper {
                 (mExpandedTextColor != null && mExpandedTextColor.isStateful());
     }
 
-
     float getExpansionFraction() {
         return mExpandedFraction;
+    }
+
+    /**
+     * Set the value indicating the current scroll value. This decides how much of the
+     * background will be displayed, as well as the title metrics/positioning.
+     * <p>
+     * A value of {@code 0.0} indicates that the layout is fully expanded.
+     * A value of {@code 1.0} indicates that the layout is fully collapsed.
+     */
+    void setExpansionFraction(float fraction) {
+        fraction = MathUtils.clamp(fraction, 0f, 1f);
+
+        if (fraction != mExpandedFraction) {
+            mExpandedFraction = fraction;
+            calculateCurrentOffsets();
+        }
     }
 
     float getCollapsedTextSize() {
         return mCollapsedTextSize;
     }
 
+    void setCollapsedTextSize(float textSize) {
+        if (mCollapsedTextSize != textSize) {
+            mCollapsedTextSize = textSize;
+            recalculate();
+        }
+    }
+
     float getExpandedTextSize() {
         return mExpandedTextSize;
+    }
+
+    void setExpandedTextSize(float textSize) {
+        if (mExpandedTextSize != textSize) {
+            mExpandedTextSize = textSize;
+            recalculate();
+        }
     }
 
     private void calculateCurrentOffsets() {
@@ -464,7 +486,7 @@ final class CollapsingTextHelper {
         // BEGIN MODIFICATION: set mTextToDrawCollapsed and calculate width using it
         mTextToDrawCollapsed = mTextToDraw;
         float width = mTextToDrawCollapsed != null ?
-            mTextPaint.measureText(mTextToDrawCollapsed, 0, mTextToDrawCollapsed.length()) : 0;
+                mTextPaint.measureText(mTextToDrawCollapsed, 0, mTextToDrawCollapsed.length()) : 0;
         // END MODIFICATION
 
         final int collapsedAbsGravity = GravityCompat.getAbsoluteGravity(mCollapsedTextGravity,
@@ -566,19 +588,12 @@ final class CollapsingTextHelper {
             float y = mCurrentDrawY;
 
             final boolean drawTexture = mUseTexture && mExpandedTitleTexture != null;
-            final float ascent;
             // MODIFICATION: removed now unused "descent" variable declaration
 
             // Update the TextPaint to the current text size
-            mTextPaint.setTextSize(mCurrentTextSize);
+//            mTextPaint.setTextSize(mCurrentTextSize);
 
             // BEGIN MODIFICATION: new drawing code
-            if (drawTexture) {
-                ascent = 0;
-            } else {
-                ascent = mTextPaint.ascent() * mScale;
-            }
-
             if (DEBUG_DRAW) {
                 // Just a debug tool, which drawn a magenta rect in the text bounds
                 canvas.drawRect(mCurrentBounds.left, y, mCurrentBounds.right,
@@ -586,7 +601,10 @@ final class CollapsingTextHelper {
                         DEBUG_DRAW_PAINT);
             }
             if (mScale != 1f) {
+                Log.e("@@@@@@@@@@@@@@@@@@@", "COLLAPSED");
                 canvas.scale(mScale, mScale, x, y);
+            } else {
+                Log.e("@@@@@@@@@@@@@@@@@@@", "EXPANDED");
             }
 
             // Compute where to draw mTextLayout for this frame
@@ -614,16 +632,48 @@ final class CollapsingTextHelper {
 
                 // Collapsed text
                 mTextPaint.setAlpha((int) (mCollapsedTextBlend * 255));
+                mToolbarTextPaint.setAlpha((int) (mCollapsedTextBlend * 255));
+                mToolbarTextPaint.setTextSize(mCurrentTextSize);
+//                float drawY = (-ascent / mScale);
+                float textHeight = mToolbarTextPaint.descent() + mToolbarTextPaint.ascent();
+                float drawY;
+                    if (null != mTextLayout && mTextLayout.getLineCount() < 2) {
+                        drawY = (float) (getToolbarHeight() / 2.5);
+                    } else {
+                        drawY = (getToolbarHeight() / 2) - textHeight;
+                    }
+//                float drawY = canvas.getClipBounds().bottom - mToolbarTextPaint.descent();
+//                int lineOneEnd = mTextLayout.getLineEnd(1);
+//                int lineOneStart = mTextLayout.getLineStart(1);
+//                mTextToDrawCollapsed = mTextToDraw.subSequence(lineOneStart, lineOneEnd);
+//                if (mTextLayout.getLineCount() > 1) {
+//                    mTextToDrawCollapsed = mTextToDrawCollapsed + "...";
+//                }
+//                Log.e("#######", "mTextToDraw.subSequence(lineOneStart, lineOneEnd) : " + mTextToDraw.subSequence(lineOneStart, lineOneEnd));
                 canvas.drawText(mTextToDrawCollapsed, 0, mTextToDrawCollapsed.length(), 0,
-                        -ascent / mScale, mTextPaint);
+                        drawY, mToolbarTextPaint);
                 // Cross-section between both texts (should stay at alpha = 255)
-                mTextPaint.setAlpha(255);
-                canvas.drawText(mTextToDraw, mTextLayout.getLineStart(0),
-                        mTextLayout.getLineEnd(0), 0, -ascent / mScale, mTextPaint);
+                mToolbarTextPaint.setAlpha(isSubTitleAvailable() ? 0 : 255);
+//                canvas.drawText(convertSpannableText(mTextToDraw), mTextLayout.getLineStart(0),
+//                        mTextLayout.getLineEnd(0), 0, -ascent / mScale, mToolbarTextPaint);
             }
-            // END MODIFICATION
         }
         canvas.restoreToCount(saveCount);
+    }
+
+    private int getToolbarHeight() {
+        if (null == mView) return -1;
+        int result = 0;
+        TypedValue tv = new TypedValue();
+        Context context = mView.getContext();
+        if (null != context.getTheme() && mView.getContext().getTheme().resolveAttribute(android.R.attr.actionBarSize, tv, true)) {
+            result = (int) TypedValue.complexToDimension(tv.data, context.getResources().getDisplayMetrics());
+        }
+        return result;
+    }
+
+    public boolean isSubTitleAvailable() {
+        return !TextUtils.isEmpty(mSubTitleText);
     }
 
     private boolean calculateIsRtl(CharSequence text) {
@@ -648,6 +698,7 @@ final class CollapsingTextHelper {
         ViewCompat.postInvalidateOnAnimation(mView);
         // END MODIFICATION
     }
+    // END MODIFICATION
 
     // BEGIN MODIFICATION: new setCollapsedTextBlend and setExpandedTextBlend methods
     private void setCollapsedTextBlend(float blend) {
@@ -659,14 +710,13 @@ final class CollapsingTextHelper {
         mExpandedTextBlend = blend;
         ViewCompat.postInvalidateOnAnimation(mView);
     }
-    // END MODIFICATION
 
     private boolean areTypefacesDifferent(Typeface first, Typeface second) {
         return (first != null && !first.equals(second)) || (first == null && second != null);
     }
 
     private void calculateUsingTextSize(final float textSize) {
-        if (mText == null) return;
+        if (mTitleText == null) return;
 
         final float collapsedWidth = mCollapsedBounds.width();
         final float expandedWidth = mExpandedBounds.width();
@@ -726,18 +776,29 @@ final class CollapsingTextHelper {
             mBoundsChanged = false;
         }
         if (mTextToDraw == null || updateDrawText) {
-            mTextPaint.setTextSize(mCurrentTextSize);
+//            mTextPaint.setTextSize(mCurrentTextSize);
             mTextPaint.setTypeface(mCurrentTypeface);
 
             // BEGIN MODIFICATION: Text layout creation and text truncation
-            StaticLayout layout = new StaticLayout(mText, mTextPaint, (int) availableWidth,
-                    Layout.Alignment.ALIGN_NORMAL, lineSpacingMultiplier, lineSpacingExtra, false);
+            StaticLayout layout = (null == mTextLayout)
+                    ? new StaticLayout(mTitleText, mTextPaint, (int) availableWidth,
+                    Layout.Alignment.ALIGN_NORMAL, lineSpacingMultiplier, lineSpacingExtra, false)
+                    : mTextLayout;
+            mSubTitleTextLayout = (null == mSubTitleTextLayout)
+                    ? new StaticLayout(mSubTitleText, mTextPaint, (int) availableWidth,
+                    Layout.Alignment.ALIGN_NORMAL, lineSpacingMultiplier, lineSpacingExtra, false)
+                    : mSubTitleTextLayout;
             CharSequence truncatedText;
             if (layout.getLineCount() > maxLines) {
-                int lastLine = maxLines - 1;
+                int lastLine;
+                if (!isSubTitleAvailable()) {
+                    lastLine = maxLines - 1;
+                } else {
+                    lastLine = 1;
+                }
                 CharSequence textBefore =
-                        lastLine > 0 ? mText.subSequence(0, layout.getLineEnd(lastLine - 1)) : "";
-                CharSequence lineText = mText.subSequence(layout.getLineStart(lastLine),
+                        (lastLine > 0 && !isSubTitleAvailable()) ? mTitleText.subSequence(0, layout.getLineEnd(lastLine - 1)) : "";
+                CharSequence lineText = mTitleText.subSequence(layout.getLineStart(lastLine),
                         layout.getLineEnd(lastLine));
                 // if last char in line is space, move it behind the ellipsis
                 CharSequence lineEnd = "";
@@ -745,15 +806,21 @@ final class CollapsingTextHelper {
                     lineEnd = lineText.subSequence(lineText.length() - 1, lineText.length());
                     lineText = lineText.subSequence(0, lineText.length() - 1);
                 }
-                // insert ellipsis character
-                lineText = TextUtils.concat(lineText, "\u2026", lineEnd);
+
+
+                int checkLineCountToAddEllipse = isSubTitleAvailable() ? 2 : 1;
+                if (layout.getLineCount() > checkLineCountToAddEllipse) {
+                    // insert ellipsis character
+                    lineText = TextUtils.concat(lineText, "\u2026", lineEnd);
+                }
                 // if the text is too long, truncate it
                 CharSequence truncatedLineText = TextUtils.ellipsize(lineText, mTextPaint,
                         availableWidth, TextUtils.TruncateAt.END);
                 truncatedText = TextUtils.concat(textBefore, truncatedLineText);
+                truncatedText = truncatedText.toString().replaceAll("\n", "");
 
             } else {
-                truncatedText = mText;
+                truncatedText = mTitleText;
             }
             if (!TextUtils.equals(truncatedText, mTextToDraw)) {
                 mTextToDraw = truncatedText;
@@ -777,11 +844,54 @@ final class CollapsingTextHelper {
                     alignment = Layout.Alignment.ALIGN_NORMAL;
                     break;
             }
+            SpannableStringBuilder spannedText = convertSpannableText(mTextToDraw);
 
-            mTextLayout = new StaticLayout(mTextToDraw, mTextPaint, (int) availableWidth,
-                alignment, lineSpacingMultiplier, lineSpacingExtra, false);
-            // END MODIFICATION
+
+            mTextLayout = new StaticLayout(spannedText, mTextPaint, (int) availableWidth,
+                    alignment, lineSpacingMultiplier, lineSpacingExtra, false);
+            final StringBuilder builder = new StringBuilder();
+            final int estimateLineCount = mTextLayout.getLineCount();
+            if (estimateLineCount > getMaxLines()) {
+                for (int count = 0; count < getMaxLines(); count++) {
+                    int lineStart = mTextLayout.getLineStart(count);
+                    int lineEnd = mTextLayout.getLineEnd(count);
+                    CharSequence line = spannedText.subSequence(lineStart, lineEnd);
+                    Log.e("############", "" + line);
+                    builder.append(line.toString());
+                }
+                spannedText = convertSpannableText(builder);
+                mTextLayout = new StaticLayout(spannedText, mTextPaint, (int) availableWidth,
+                        alignment, lineSpacingMultiplier, lineSpacingExtra, false);
+            }
         }
+    }
+
+    private SpannableStringBuilder convertSpannableText(CharSequence mTextToDraw) {
+        Log.e("@@@@@@@@@@@@", "mCurrentTextSize: " + mCurrentTextSize);
+        String textContent = mTextToDraw.toString();
+        int totalSpanLength = textContent.length();
+        SpannableStringBuilder spannableContent = new SpannableStringBuilder(textContent);
+        if (isSubTitleAvailable() && spannableContent.length() > mSubTitleText.length()) {
+            if (null != mSubTitleTextLayout) {
+                int subTitleCount = mSubTitleTextLayout.getLineCount();
+                if (subTitleCount > 1) {
+                    textContent = mTextToDraw.toString().substring(mSubTitleText.length(), mTextToDraw.length());
+                    int lineStart = mSubTitleTextLayout.getLineStart(0);
+                    int lineEnd = mSubTitleTextLayout.getLineEnd(0);
+                    CharSequence truncatedSubTitle = mSubTitleText.subSequence(lineStart, lineEnd).toString().concat("\u2026");
+
+                    spannableContent = new SpannableStringBuilder(truncatedSubTitle + textContent);
+                }
+            }
+            spannableContent.setSpan(new StyleSpan(Typeface.NORMAL), 0, mSubTitleText.length() + 1, 0);
+            spannableContent.setSpan(new RelativeSizeSpan(5f), 0, mSubTitleText.length() + 1, 0);
+            spannableContent.setSpan(new StyleSpan(Typeface.NORMAL), mSubTitleText.length() + 1, totalSpanLength, 0);
+            spannableContent.setSpan(new RelativeSizeSpan(8f), mSubTitleText.length() + 1, totalSpanLength, 0);
+        } else {
+            spannableContent.setSpan(new StyleSpan(Typeface.NORMAL), 0, totalSpanLength, 0);
+            spannableContent.setSpan(new RelativeSizeSpan(8f), 0, totalSpanLength, 0);
+        }
+        return spannableContent;
     }
 
     private void ensureExpandedTexture() {
@@ -811,6 +921,7 @@ final class CollapsingTextHelper {
             mTexturePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         }
     }
+    // END MODIFICATION
 
     // BEGIN MODIFICATION: new ensureCollapsedTexture and ensureCrossSectionTexture methods
     private void ensureCollapsedTexture() {
@@ -825,9 +936,6 @@ final class CollapsingTextHelper {
             return; // If the width or height are 0, return
         }
         mCollapsedTitleTexture = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(mCollapsedTitleTexture);
-        c.drawText(mTextToDrawCollapsed, 0, mTextToDrawCollapsed.length(), 0,
-                -mTextPaint.ascent() / mScale, mTextPaint);
         if (mTexturePaint == null) {
             // Make sure we have a paint
             mTexturePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
@@ -847,15 +955,11 @@ final class CollapsingTextHelper {
             return; // If the width or height are 0, return
         }
         mCrossSectionTitleTexture = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-        Canvas c = new Canvas(mCrossSectionTitleTexture);
-        c.drawText(mTextToDraw, mTextLayout.getLineStart(0),
-                mTextLayout.getLineEnd(0), 0, -mTextPaint.ascent() / mScale, mTextPaint);
         if (mTexturePaint == null) {
             // Make sure we have a paint
             mTexturePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
         }
     }
-    // END MODIFICATION
 
     public void recalculate() {
         if (mView.getHeight() > 0 && mView.getWidth() > 0) {
@@ -866,22 +970,38 @@ final class CollapsingTextHelper {
         }
     }
 
+
+    CharSequence getText() {
+        return mTitleText;
+    }
+
     /**
      * Set the title to display
      *
      * @param text
      */
     void setText(CharSequence text) {
-        if (text == null || !text.equals(mText)) {
-            mText = text;
+        if (text == null || !text.equals(mTitleText)) {
+            mTitleText = text;
             mTextToDraw = null;
             clearTexture();
             recalculate();
         }
     }
 
-    CharSequence getText() {
-        return mText;
+    void setRawTitleText(CharSequence rawTitleText) {
+        this.rawTitleText = rawTitleText;
+    }
+
+    public CharSequence getSubTitleText() {
+        return mSubTitleText;
+    }
+
+    void setSubTitleText(CharSequence subTitle) {
+        if (TextUtils.isEmpty(subTitle)) subTitle = "";
+        if (!subTitle.equals(mSubTitleText)) {
+            mSubTitleText = subTitle;
+        }
     }
 
     private void clearTexture() {
@@ -901,46 +1021,25 @@ final class CollapsingTextHelper {
         // END MODIFICATION
     }
 
-    /**
-     * Returns true if {@code value} is 'close' to it's closest decimal value. Close is currently
-     * defined as it's difference being < 0.001.
-     */
-    private static boolean isClose(float value, float targetValue) {
-        return Math.abs(value - targetValue) < 0.001f;
-    }
-
     ColorStateList getExpandedTextColor() {
         return mExpandedTextColor;
+    }
+
+    void setExpandedTextColor(ColorStateList textColor) {
+        if (mExpandedTextColor != textColor) {
+            mExpandedTextColor = textColor;
+            recalculate();
+        }
     }
 
     ColorStateList getCollapsedTextColor() {
         return mCollapsedTextColor;
     }
 
-    /**
-     * Blend {@code color1} and {@code color2} using the given ratio.
-     *
-     * @param ratio of which to blend. 0.0 will return {@code color1}, 0.5 will give an even blend,
-     *              1.0 will return {@code color2}.
-     */
-    private static int blendColors(int color1, int color2, float ratio) {
-        final float inverseRatio = 1f - ratio;
-        float a = (Color.alpha(color1) * inverseRatio) + (Color.alpha(color2) * ratio);
-        float r = (Color.red(color1) * inverseRatio) + (Color.red(color2) * ratio);
-        float g = (Color.green(color1) * inverseRatio) + (Color.green(color2) * ratio);
-        float b = (Color.blue(color1) * inverseRatio) + (Color.blue(color2) * ratio);
-        return Color.argb((int) a, (int) r, (int) g, (int) b);
-    }
-
-    private static float lerp(float startValue, float endValue, float fraction,
-            Interpolator interpolator) {
-        if (interpolator != null) {
-            fraction = interpolator.getInterpolation(fraction);
+    void setCollapsedTextColor(ColorStateList textColor) {
+        if (mCollapsedTextColor != textColor) {
+            mCollapsedTextColor = textColor;
+            recalculate();
         }
-        return AnimationUtils.lerp(startValue, endValue, fraction);
-    }
-
-    private static boolean rectEquals(Rect r, int left, int top, int right, int bottom) {
-        return !(r.left != left || r.top != top || r.right != right || r.bottom != bottom);
     }
 }

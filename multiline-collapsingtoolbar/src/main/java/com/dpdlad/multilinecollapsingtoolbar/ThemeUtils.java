@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package net.opacapp.multilinecollapsingtoolbar;
+package com.dpdlad.multilinecollapsingtoolbar;
 
 import android.content.Context;
 import android.content.res.TypedArray;

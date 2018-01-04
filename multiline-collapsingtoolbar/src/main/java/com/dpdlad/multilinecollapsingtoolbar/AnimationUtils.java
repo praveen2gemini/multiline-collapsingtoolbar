@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package net.opacapp.multilinecollapsingtoolbar;
+package com.dpdlad.multilinecollapsingtoolbar;
 
 import android.support.v4.view.animation.FastOutLinearInInterpolator;
 import android.support.v4.view.animation.FastOutSlowInInterpolator;

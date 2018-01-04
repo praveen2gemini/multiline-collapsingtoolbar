@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package net.opacapp.multilinecollapsingtoolbar;
+package com.dpdlad.multilinecollapsingtoolbar;
 
 import android.graphics.Matrix;
 import android.graphics.Rect;
